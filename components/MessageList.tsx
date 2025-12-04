@@ -2,6 +2,7 @@
 
 import { Message } from '@/lib/types';
 import { useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 
 interface MessageListProps {
   messages: Message[];
@@ -53,7 +54,13 @@ export default function MessageList({ messages, isLoading }: MessageListProps) {
                 : 'bg-gray-100 text-gray-900'
             }`}
           >
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            {message.role === 'user' ? (
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            ) : (
+              <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5">
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              </div>
+            )}
           </div>
         </div>
       ))}
