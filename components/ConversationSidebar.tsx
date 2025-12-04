@@ -10,6 +10,7 @@ interface ConversationSidebarProps {
   onDeleteConversation: (id: string) => void;
   isOpen: boolean;
   onClose: () => void;
+  loading?: boolean;
 }
 
 export default function ConversationSidebar({
@@ -20,6 +21,7 @@ export default function ConversationSidebar({
   onDeleteConversation,
   isOpen,
   onClose,
+  loading = false,
 }: ConversationSidebarProps) {
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -61,7 +63,11 @@ export default function ConversationSidebar({
         </div>
 
         <div className="flex-1 overflow-y-auto p-2">
-          {conversations.length === 0 ? (
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
+            </div>
+          ) : conversations.length === 0 ? (
             <p className="text-sm text-gray-500 text-center py-8">
               No conversations yet
             </p>

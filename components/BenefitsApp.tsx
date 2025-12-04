@@ -11,6 +11,12 @@ import ConversationSidebar from './ConversationSidebar';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 
+// Structured error state for better UX
+interface ErrorState {
+  message: string;
+  action?: () => void;
+}
+
 export default function BenefitsApp() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -18,8 +24,10 @@ export default function BenefitsApp() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
 
   const supabase = createClient();
 
@@ -52,61 +60,107 @@ export default function BenefitsApp() {
   }, [user]);
 
   const loadConversations = async () => {
-    const { data, error } = await supabase
-      .from('conversations')
-      .select('*')
-      .order('updated_at', { ascending: false });
+    setLoadingConversations(true);
+    try {
+      const { data, error: dbError } = await supabase
+        .from('conversations')
+        .select('*')
+        .order('updated_at', { ascending: false });
 
-    if (error) {
-      console.error('Error loading conversations:', error);
-      return;
+      if (dbError) {
+        throw dbError;
+      }
+
+      setConversations(data || []);
+      setError(null);
+    } catch (err) {
+      console.error('Error loading conversations:', err);
+      setError({
+        message: 'Failed to load conversations. Please refresh the page.',
+        action: loadConversations,
+      });
+    } finally {
+      setLoadingConversations(false);
     }
-
-    setConversations(data || []);
   };
 
   const loadMessages = async (conversationId: string) => {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true });
+    setLoadingMessages(true);
+    try {
+      const { data, error: dbError } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true });
 
-    if (error) {
-      console.error('Error loading messages:', error);
-      return;
+      if (dbError) {
+        throw dbError;
+      }
+
+      setMessages(
+        (data || []).map((m) => ({
+          id: m.id,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: new Date(m.created_at),
+        }))
+      );
+      setError(null);
+    } catch (err) {
+      console.error('Error loading messages:', err);
+      setError({
+        message: 'Failed to load messages. Please try again.',
+        action: () => loadMessages(conversationId),
+      });
+    } finally {
+      setLoadingMessages(false);
     }
-
-    setMessages(
-      (data || []).map((m) => ({
-        id: m.id,
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-        timestamp: new Date(m.created_at),
-      }))
-    );
   };
 
   const selectConversation = async (id: string) => {
     setCurrentConversationId(id);
     await loadMessages(id);
+    setSidebarOpen(false);
   };
 
-  const createConversation = async (firstMessage: string): Promise<string | null> => {
-    if (!user) return null;
+  // Generate a better title from the first message
+  const generateTitle = (message: string): string => {
+    // Remove markdown characters
+    const plainText = message.replace(/[*_~`#]/g, '').trim();
 
-    // Generate a title from the first message
-    const title = firstMessage.slice(0, 50) + (firstMessage.length > 50 ? '...' : '');
+    // Try to get the first sentence
+    const firstSentence = plainText.match(/^.+?[.!?]\s/)?.[0];
 
-    const { data, error } = await supabase
+    if (firstSentence && firstSentence.length <= 60) {
+      return firstSentence.trim();
+    }
+
+    if (plainText.length <= 50) {
+      return plainText;
+    }
+
+    // Truncate at word boundary
+    const truncated = plainText.slice(0, 50);
+    const lastSpace = truncated.lastIndexOf(' ');
+    return (lastSpace > 30 ? truncated.slice(0, lastSpace) : truncated) + '...';
+  };
+
+  const createConversation = async (firstMessage: string): Promise<string> => {
+    if (!user) {
+      throw new Error('You must be logged in to save conversations');
+    }
+
+    const title = generateTitle(firstMessage);
+
+    const { data, error: dbError } = await supabase
       .from('conversations')
       .insert({ user_id: user.id, title })
       .select()
       .single();
 
-    if (error) {
-      console.error('Error creating conversation:', error);
-      return null;
+    if (dbError) {
+      console.error('Error creating conversation:', dbError);
+      throw new Error('Failed to create conversation');
     }
 
     setConversations((prev) => [data, ...prev]);
@@ -115,12 +169,13 @@ export default function BenefitsApp() {
   };
 
   const saveMessage = async (conversationId: string, role: 'user' | 'assistant', content: string) => {
-    const { error } = await supabase
+    const { error: dbError } = await supabase
       .from('messages')
       .insert({ conversation_id: conversationId, role, content });
 
-    if (error) {
-      console.error('Error saving message:', error);
+    if (dbError) {
+      console.error('Error saving message:', dbError);
+      throw new Error('Failed to save message');
     }
 
     // Update conversation's updated_at
@@ -131,20 +186,28 @@ export default function BenefitsApp() {
   };
 
   const deleteConversation = async (id: string) => {
-    const { error } = await supabase
-      .from('conversations')
-      .delete()
-      .eq('id', id);
+    try {
+      const { error: dbError } = await supabase
+        .from('conversations')
+        .delete()
+        .eq('id', id);
 
-    if (error) {
-      console.error('Error deleting conversation:', error);
-      return;
-    }
+      if (dbError) {
+        throw dbError;
+      }
 
-    setConversations((prev) => prev.filter((c) => c.id !== id));
-    if (currentConversationId === id) {
-      setCurrentConversationId(null);
-      setMessages([]);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (currentConversationId === id) {
+        setCurrentConversationId(null);
+        setMessages([]);
+      }
+      setError(null);
+    } catch (err) {
+      console.error('Error deleting conversation:', err);
+      setError({
+        message: 'Failed to delete conversation. Please try again.',
+        action: () => deleteConversation(id),
+      });
     }
   };
 
@@ -152,9 +215,13 @@ export default function BenefitsApp() {
     setCurrentConversationId(null);
     setMessages([]);
     setSidebarOpen(false);
+    setError(null);
   };
 
   const sendMessage = useCallback(async (content: string) => {
+    if (!content.trim()) return;
+
+    // Create user message
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -162,22 +229,24 @@ export default function BenefitsApp() {
       timestamp: new Date(),
     };
 
+    // Add user message optimistically
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
     setError(null);
 
-    // Create conversation if needed (for logged-in users)
-    let convId = currentConversationId;
-    if (user && !convId) {
-      convId = await createConversation(content);
-    }
-
-    // Save user message (for logged-in users)
-    if (user && convId) {
-      await saveMessage(convId, 'user', content);
-    }
-
     try {
+      // Create conversation if needed (for logged-in users)
+      let convId = currentConversationId;
+      if (user && !convId) {
+        convId = await createConversation(content);
+      }
+
+      // Save user message (for logged-in users)
+      if (user && convId) {
+        await saveMessage(convId, 'user', content);
+      }
+
+      // Get AI response
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -190,7 +259,7 @@ export default function BenefitsApp() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        throw new Error('Failed to get response from AI');
       }
 
       const data = await response.json();
@@ -211,7 +280,15 @@ export default function BenefitsApp() {
         loadConversations();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
+      console.error('Error sending message:', err);
+
+      // Remove user message on failure (rollback)
+      setMessages((prev) => prev.filter((m) => m.id !== userMessage.id));
+
+      setError({
+        message: err instanceof Error ? err.message : 'Failed to send message',
+        action: () => sendMessage(content),
+      });
     } finally {
       setIsLoading(false);
     }
@@ -252,6 +329,7 @@ export default function BenefitsApp() {
         onDeleteConversation={deleteConversation}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        loading={loadingConversations}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -262,13 +340,21 @@ export default function BenefitsApp() {
         />
 
         <main className="flex-1 flex flex-col overflow-hidden">
-          <MessageList messages={messages} isLoading={isLoading} />
-
           {error && (
-            <div className="px-4 py-2 bg-red-50 border-t border-red-100">
-              <p className="text-sm text-red-600 text-center">{error}</p>
+            <div className="px-4 py-3 bg-red-50 border-b border-red-100 flex items-center justify-between">
+              <p className="text-sm text-red-700">{error.message}</p>
+              {error.action && (
+                <button
+                  onClick={error.action}
+                  className="text-sm text-red-600 hover:text-red-800 font-medium underline ml-4"
+                >
+                  Try Again
+                </button>
+              )}
             </div>
           )}
+
+          <MessageList messages={messages} isLoading={isLoading || loadingMessages} />
 
           <MessageInput onSend={sendMessage} disabled={isLoading} />
         </main>
