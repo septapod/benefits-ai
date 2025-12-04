@@ -18,6 +18,7 @@ export default function AdminDashboard() {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<DbMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [debugInfo, setDebugInfo] = useState<string>('');
 
   const supabase = createClient();
 
@@ -28,16 +29,25 @@ export default function AdminDashboard() {
   const checkAdminStatus = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
+      setDebugInfo('No user session found');
       setIsAdmin(false);
       setLoading(false);
       return;
     }
 
-    const { data: profile } = await supabase
+    setDebugInfo(`User ID: ${user.id}, Email: ${user.email}`);
+
+    const { data: profile, error } = await supabase
       .from('profiles')
       .select('is_admin')
       .eq('id', user.id)
       .single();
+
+    if (error) {
+      setDebugInfo(prev => `${prev}\nProfile query error: ${error.message}`);
+    } else {
+      setDebugInfo(prev => `${prev}\nProfile data: ${JSON.stringify(profile)}`);
+    }
 
     setIsAdmin(profile?.is_admin ?? false);
     setLoading(false);
@@ -148,9 +158,12 @@ export default function AdminDashboard() {
   if (!isAdmin) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
+        <div className="text-center max-w-lg">
           <h1 className="text-2xl font-semibold text-gray-900 mb-2">Access Denied</h1>
           <p className="text-gray-600 mb-4">You don&apos;t have admin privileges.</p>
+          <pre className="text-left text-xs bg-gray-100 p-4 rounded mb-4 whitespace-pre-wrap">
+            {debugInfo || 'Loading debug info...'}
+          </pre>
           <Link href="/" className="text-blue-600 hover:underline">
             Back to BenefitsAI
           </Link>
